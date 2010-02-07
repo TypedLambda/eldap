@@ -4,6 +4,8 @@
 %%% Function: Erlang client LDAP implementation according RFC 2251,2253
 %%%           and 2255. The interface is based on RFC 1823, and
 %%%           draft-ietf-asid-ldap-c-api-00.txt
+%%% Modified: 07 Feb 2010 by Edwin Fine <emofine@usa.net>
+%%%           Added support for LDAP compare operation.
 %%% --------------------------------------------------------------------
 -vc('$Id$ ').
 -export([open/1,open/2,simple_bind/3,controlling_process/2,
@@ -13,6 +15,11 @@
 	 'and'/1,'or'/1,'not'/1,modify/3, mod_add/2, mod_delete/2,
 	 mod_replace/2, add/3, delete/2, modify_dn/5,parse_dn/1,
 	 parse_ldap_url/1]).
+
+%%%-------------------------------------------------------------------
+%%% Export the compare operation. This implements ldapcompare.
+%%%------------------------------------------------------------------- 
+-export([compare/4]).
 
 -import(lists,[concat/1]).
 
@@ -61,7 +68,7 @@
 open(Hosts) -> 
     open(Hosts, []).
 
-open(Hosts, Opts) when list(Hosts), list(Opts) ->
+open(Hosts, Opts) when is_list(Hosts), is_list(Opts) ->
     Self = self(),
     Pid = spawn_link(fun() -> init(Hosts, Opts, Self) end),
     recv(Pid).
@@ -70,14 +77,14 @@ open(Hosts, Opts) when list(Hosts), list(Opts) ->
 %%% Shutdown connection (and process) asynchronous.
 %%% --------------------------------------------------------------------
 
-close(Handle) when pid(Handle) ->
+close(Handle) when is_pid(Handle) ->
     send(Handle, close).
 
 %%% --------------------------------------------------------------------
 %%% Set who we should link ourselves to
 %%% --------------------------------------------------------------------
 
-controlling_process(Handle, Pid) when pid(Handle),pid(Pid)  ->
+controlling_process(Handle, Pid) when is_pid(Handle),is_pid(Pid)  ->
     link(Pid),
     send(Handle, {cnt_proc, Pid}),
     recv(Handle).
@@ -91,7 +98,7 @@ controlling_process(Handle, Pid) when pid(Handle),pid(Pid)  ->
 %%%
 %%%  Returns: ok | {error, Error}
 %%% --------------------------------------------------------------------
-simple_bind(Handle, Dn, Passwd) when pid(Handle)  ->
+simple_bind(Handle, Dn, Passwd) when is_pid(Handle)  ->
     send(Handle, {simple_bind, Dn, Passwd}),
     recv(Handle).
 
@@ -108,13 +115,13 @@ simple_bind(Handle, Dn, Passwd) when pid(Handle)  ->
 %%%          {"telephoneNumber", ["545 555 00"]}]
 %%%     )
 %%% --------------------------------------------------------------------
-add(Handle, Entry, Attributes) when pid(Handle),list(Entry),list(Attributes) ->
+add(Handle, Entry, Attributes) when is_pid(Handle),is_list(Entry),is_list(Attributes) ->
     send(Handle, {add, Entry, add_attrs(Attributes)}),
     recv(Handle).
 
 %%% Do sanity check !
 add_attrs(Attrs) ->
-    F = fun({Type,Vals}) when list(Type),list(Vals) -> 
+    F = fun({Type,Vals}) when is_list(Type),is_list(Vals) -> 
 		%% Confused ? Me too... :-/
 		{'AddRequest_attributes',Type, Vals} 
 	end,
@@ -132,7 +139,7 @@ add_attrs(Attrs) ->
 %%%         "cn=Bill Valentine, ou=people, o=Bluetail AB, dc=bluetail, dc=com"
 %%%        )
 %%% --------------------------------------------------------------------
-delete(Handle, Entry) when pid(Handle), list(Entry) ->
+delete(Handle, Entry) when is_pid(Handle), is_list(Entry) ->
     send(Handle, {delete, Entry}),
     recv(Handle).
 
@@ -147,7 +154,7 @@ delete(Handle, Entry) when pid(Handle), list(Entry) ->
 %%%          add("description", ["LDAP hacker"])] 
 %%%        )
 %%% --------------------------------------------------------------------
-modify(Handle, Object, Mods) when pid(Handle), list(Object), list(Mods) ->
+modify(Handle, Object, Mods) when is_pid(Handle), is_list(Object), is_list(Mods) ->
     send(Handle, {modify, Object, Mods}),
     recv(Handle).
 
@@ -156,9 +163,9 @@ modify(Handle, Object, Mods) when pid(Handle), list(Object), list(Mods) ->
 %%% Example:
 %%%            replace("telephoneNumber", ["555 555 00"])
 %%%
-mod_add(Type, Values) when list(Type), list(Values)     -> m(add, Type, Values).
-mod_delete(Type, Values) when list(Type), list(Values)  -> m(delete, Type, Values).
-mod_replace(Type, Values) when list(Type), list(Values) -> m(replace, Type, Values).
+mod_add(Type, Values) when is_list(Type), is_list(Values)     -> m(add, Type, Values).
+mod_delete(Type, Values) when is_list(Type), is_list(Values)  -> m(delete, Type, Values).
+mod_replace(Type, Values) when is_list(Type), is_list(Values) -> m(replace, Type, Values).
 
 m(Operation, Type, Values) ->
     #'ModifyRequest_modification_SEQOF'{
@@ -180,7 +187,7 @@ m(Operation, Type, Values) ->
 %%%        )
 %%% --------------------------------------------------------------------
 modify_dn(Handle, Entry, NewRDN, DelOldRDN, NewSup) 
-  when pid(Handle),list(Entry),list(NewRDN),atom(DelOldRDN),list(NewSup) ->
+  when is_pid(Handle),is_list(Entry),is_list(NewRDN),is_atom(DelOldRDN),is_list(NewSup) ->
     send(Handle, {modify_dn, Entry, NewRDN, 
 		  bool_p(DelOldRDN), optional(NewSup)}),
     recv(Handle).
@@ -191,6 +198,25 @@ bool_p(Bool) when Bool==true;Bool==false -> Bool.
 
 optional([])    -> asn1_NOVALUE;
 optional(Value) -> Value.
+
+%%% --------------------------------------------------------------------
+%%% Compare an entry.
+%%%
+%%% Example:
+%%%
+%%%  Result = compare(Handle, 
+%%%    "cn=Bill Valentine, ou=people, o=Bluetail AB, dc=bluetail, dc=com",
+%%%    "sn", "Valentine"),
+%%%  case Result of
+%%%	true -> ok; % Compared true
+%%%	false -> ok; % Compared false or 'other'
+%%%	Error -> throw(Error) % Anything else
+%%%  end
+%%% --------------------------------------------------------------------
+compare(Handle, Entry, AttributeDesc, AttributeValue)
+  when is_pid(Handle),is_list(Entry),is_list(AttributeDesc),is_list(AttributeValue) ->
+    send(Handle, {compare, Entry, AttributeDesc, AttributeValue}),
+    recv(Handle).
 
 %%% --------------------------------------------------------------------
 %%% Synchronous search of the Directory returning a 
@@ -217,12 +243,12 @@ optional(Value) -> Value.
 %%%        []}}
 %%%
 %%% --------------------------------------------------------------------
-search(Handle, A) when pid(Handle), record(A, eldap_search) ->
+search(Handle, A) when is_pid(Handle), is_record(A, eldap_search) ->
     call_search(Handle, A);
-search(Handle, L) when pid(Handle), list(L) ->
+search(Handle, L) when is_pid(Handle), is_list(L) ->
     case catch parse_search_args(L) of
 	{error, Emsg}                  -> {error, Emsg};
-	A when record(A, eldap_search) -> call_search(Handle, A)
+	A when is_record(A, eldap_search) -> call_search(Handle, A)
     end.
 
 call_search(Handle, A) ->
@@ -242,7 +268,7 @@ parse_search_args([{attributes, Attrs}|T],A) ->
     parse_search_args(T,A#eldap_search{attributes = Attrs});
 parse_search_args([{types_only, TypesOnly}|T],A) ->
     parse_search_args(T,A#eldap_search{types_only = TypesOnly});
-parse_search_args([{timeout, Timeout}|T],A) when integer(Timeout) ->
+parse_search_args([{timeout, Timeout}|T],A) when is_integer(Timeout) ->
     parse_search_args(T,A#eldap_search{timeout = Timeout});
 parse_search_args([H|_],_) ->
     throw({error,{unknown_arg, H}});
@@ -259,9 +285,9 @@ wholeSubtree() -> wholeSubtree.
 %%%
 %%% Boolean filter operations
 %%%
-'and'(ListOfFilters) when list(ListOfFilters) -> {'and',ListOfFilters}.
-'or'(ListOfFilters)  when list(ListOfFilters) -> {'or', ListOfFilters}.
-'not'(Filter)        when tuple(Filter)       -> {'not',Filter}.
+'and'(ListOfFilters) when is_list(ListOfFilters) -> {'and',ListOfFilters}.
+'or'(ListOfFilters)  when is_list(ListOfFilters) -> {'or', ListOfFilters}.
+'not'(Filter)        when is_tuple(Filter)       -> {'not',Filter}.
 
 %%%
 %%% The following Filter parameters consist of an attribute
@@ -279,7 +305,7 @@ av_assert(Desc, Value) ->
 %%%
 %%% Filter to check for the presence of an attribute
 %%%
-present(Attribute) when list(Attribute) -> 
+present(Attribute) when is_list(Attribute) -> 
     {present, Attribute}.
 
 
@@ -298,7 +324,7 @@ present(Attribute) when list(Attribute) ->
 %%% Example: substrings("sn",[{initial,"To"},{any,"kv"},{final,"st"}])
 %%% will match entries containing:  'sn: Tornkvist'
 %%%
-substrings(Type, SubStr) when list(Type), list(SubStr) -> 
+substrings(Type, SubStr) when is_list(Type), is_list(SubStr) -> 
     Ss = {'SubstringFilter_substrings',v_substr(SubStr)},
     {substrings,#'SubstringFilter'{type = Type,
 				   substrings = Ss}}.
@@ -321,9 +347,9 @@ init(Hosts, Opts, Cpid) ->
 	    exit(Else)
     end.
 
-parse_args([{port, Port}|T], Cpid, Data) when integer(Port) ->
+parse_args([{port, Port}|T], Cpid, Data) when is_integer(Port) ->
     parse_args(T, Cpid, Data#eldap{port = Port});
-parse_args([{timeout, Timeout}|T], Cpid, Data) when integer(Timeout),Timeout>0 ->
+parse_args([{timeout, Timeout}|T], Cpid, Data) when is_integer(Timeout),Timeout>0 ->
     parse_args(T, Cpid, Data#eldap{timeout = Timeout});
 parse_args([{anon_auth, true}|T], Cpid, Data) ->
     parse_args(T, Cpid, Data#eldap{anon_auth = false});
@@ -333,7 +359,7 @@ parse_args([{ssl, true}|T], Cpid, Data) ->
     parse_args(T, Cpid, Data#eldap{use_tls = true});
 parse_args([{ssl, _}|T], Cpid, Data) ->
     parse_args(T, Cpid, Data);
-parse_args([{log, F}|T], Cpid, Data) when function(F) ->
+parse_args([{log, F}|T], Cpid, Data) when is_function(F) ->
     parse_args(T, Cpid, Data#eldap{log = F});
 parse_args([{log, _}|T], Cpid, Data) ->
     parse_args(T, Cpid, Data);
@@ -408,7 +434,12 @@ loop(Cpid, Data) ->
 	    ?PRINT("New Cpid is: ~p~n",[NewCpid]),
 	    loop(NewCpid, Data);
 
-	{From, close} ->
+	{From, {compare, Obj, AttributeDesc, AttributeValue}} ->
+	    {Res,NewData} = do_compare(Data, Obj, AttributeDesc, AttributeValue),
+	    send(From,Res),
+	    loop(Cpid, NewData);
+
+	{_From, close} ->
 	    unlink(Cpid),
 	    exit(closed);
 
@@ -469,6 +500,72 @@ exec_simple_bind_reply(Data, {ok,Msg}) when
 exec_simple_bind_reply(_, Error) ->
     {error, Error}.
 
+%%%--------------------------------------------------------------------
+%%% @doc Performs ldap_compare operation.
+%%% 
+%%% @type internal_data() = term().
+%%% @spec (Data, Entry, AttributeDesc, AttributeValue) -> {Result, NewData}
+%%%	Data = internal_data()
+%%%	NewData = internal_data()
+%%%	Entry = string()
+%%%	AttributeDesc = string()
+%%%	AttributeValue = string()
+%%%	Result = {ok, CompareResult} | {error, Error}
+%%%	Error = noSuchObject | undefinedAttributeType |
+%%%	        invalidAttributeSyntax | invalidDNSyntax | OtherLDAPError
+%%%	CompareResult = true | false
+%%% @end
+%%%------------------------------------------------------------------- 
+do_compare(Data, Entry, AttributeDesc, AttributeValue) ->
+    case catch do_compare_0(Data, Entry, av_assert(AttributeDesc, AttributeValue)) of
+	{error,Emsg}                -> {ldap_closed_p(Data, Emsg),Data};
+	{'EXIT',Error}              -> {ldap_closed_p(Data, Error),Data};
+	{ok,NewData,CompareResult}  -> {{ok,CompareResult}, NewData};
+	Else                        -> {ldap_closed_p(Data, Else),Data}
+    end.
+
+do_compare_0(Data, Entry, AttributeValueAssertion) ->
+    Req = #'CompareRequest'{
+	entry = Entry,
+	ava = AttributeValueAssertion
+    },
+    S = Data#eldap.fd,
+    Id = bump_id(Data),
+    log2(Data, "compare request = ~p~n", [Req]),
+    Resp = request(S, Data, Id, {compareRequest, Req}),
+    log2(Data, "compare reply = ~p~n", [Resp]),    
+    get_compare_response(Data#eldap{id = Id}, Resp).
+
+%%%-------------------------------------------------------------------
+%%% @doc Gets result of compare op. CompareResult will be 'true' only
+%%% if the LDAP result code is 'compareTrue'. CompareResult will be
+%%% 'false' if the LDAP result code is 'compareFalse' or 'other'.
+%%% Any other LDAP result code will cause an error return.
+%%%
+%%% @spec (Data, Rsp, Op) -> {ok,Data,CompareResult}  |
+%%%		{error, Error}
+%%%		Data = internal_data()
+%%%		CompareResult = boolean()
+%%%		Rsp = {ok, Msg} | LDAPError::term()
+%%%		Op = 'compareResponse'
+%%%		Error = term()
+%%% 
+%%% @end
+%%%--------------------------------------------------------------------
+get_compare_response(Data, {ok,Msg})
+  when Msg#'LDAPMessage'.messageID == Data#eldap.id ->
+    case Msg#'LDAPMessage'.protocolOp of
+	{compareResponse, Result} ->
+	    case Result#'LDAPResult'.resultCode of
+		compareTrue  -> {ok,Data,true};
+		compareFalse -> {ok,Data,false};
+		other        -> {ok,Data,false};
+		Error        -> {error, Error}
+	    end;
+	Other -> {error, Other}
+    end;
+get_compare_response(_, Error) ->
+    {error, Error}.
 
 %%% --------------------------------------------------------------------
 %%% searchRequest
@@ -492,7 +589,7 @@ polish(Res, Ref) ->
     #eldap_search_result{entries = R,
 			 referrals = Ref}.
 
-polish_result([H|T]) when record(H, 'SearchResultEntry') ->
+polish_result([H|T]) when is_record(H, 'SearchResultEntry') ->
     ObjectName = H#'SearchResultEntry'.objectName,
     F = fun({_,A,V}) -> {A,V} end,
     Attrs = lists:map(F, H#'SearchResultEntry'.attributes),
@@ -527,12 +624,12 @@ collect_search_responses(Data, Req, ID) ->
     collect_search_responses(Data, S, ID, Resp, [], []).
 
 collect_search_responses(Data, S, ID, {ok,Msg}, Acc, Ref) 
-  when record(Msg,'LDAPMessage') ->
+  when is_record(Msg,'LDAPMessage') ->
     case Msg#'LDAPMessage'.protocolOp of
 	{'searchResDone',R} when R#'LDAPResult'.resultCode == success ->
 	    log2(Data, "search reply = searchResDone ~n", []),    
 	    {ok,Acc,Ref,Data};
-	{'searchResEntry',R} when record(R,'SearchResultEntry') ->
+	{'searchResEntry',R} when is_record(R,'SearchResultEntry') ->
 	    Resp = recv_response(S, Data),
 	    log2(Data, "search reply = ~p~n", [Resp]),    
 	    collect_search_responses(Data, S, ID, Resp, [R|Acc], Ref);
@@ -720,7 +817,7 @@ v_filter({greaterOrEqual,AV}) -> {greaterOrEqual,AV};
 v_filter({lessOrEqual,AV})    -> {lessOrEqual,AV};
 v_filter({approxMatch,AV})    -> {approxMatch,AV};
 v_filter({present,A})         -> {present,A};
-v_filter({substrings,S}) when record(S,'SubstringFilter') -> {substrings,S};
+v_filter({substrings,S}) when is_record(S,'SubstringFilter') -> {substrings,S};
 v_filter(_Filter) -> throw({error,concat(["unknown filter: ",_Filter])}).
 
 v_modifications(Mods) ->
@@ -732,7 +829,7 @@ v_modifications(Mods) ->
 	end,
     lists:foreach(F, Mods).
 
-v_substr([{Key,Str}|T]) when list(Str),Key==initial;Key==any;Key==final ->
+v_substr([{Key,Str}|T]) when is_list(Str),Key==initial;Key==any;Key==final ->
     [{Key,Str}|v_substr(T)];
 v_substr([H|_]) ->
     throw({error,{substring_arg,H}});
@@ -747,11 +844,11 @@ v_bool(true)  -> true;
 v_bool(false) -> false;
 v_bool(_Bool) -> throw({error,concat(["not Boolean: ",_Bool])}).
 
-v_timeout(I) when integer(I), I>=0 -> I;
+v_timeout(I) when is_integer(I), I>=0 -> I;
 v_timeout(_I) -> throw({error,concat(["timeout not positive integer: ",_I])}).
 
 v_attributes(Attrs) ->
-    F = fun(A) when list(A) -> A;
+    F = fun(A) when is_list(A) -> A;
 	   (A) -> throw({error,concat(["attribute not String: ",A])})
 	end,
     lists:map(F,Attrs).
@@ -761,10 +858,11 @@ v_attributes(Attrs) ->
 %%% Log routines. Call a user provided log routine F.
 %%% --------------------------------------------------------------------
 
+-compile([{nowarn_unused_function, [{log1,3},  {log2,3}, {log,4}]}]).
 log1(Data, Str, Args) -> log(Data, Str, Args, 1).
 log2(Data, Str, Args) -> log(Data, Str, Args, 2).
 
-log(Data, Str, Args, Level) when function(Data#eldap.log) ->
+log(Data, Str, Args, Level) when is_function(Data#eldap.log) ->
     catch (Data#eldap.log)(Level, Str, Args);
 log(_, _, _, _) -> 
     ok.
@@ -880,7 +978,7 @@ parse_name_component(Str,Acc) ->
 
 parse_attribute_type_and_value(Str) ->
     case parse_attribute_type(Str) of
-	{Rest,[]} -> 
+	{_Rest,[]} -> 
 	    error(expecting_attribute_type,Str);
 	{Rest,Type} ->
 	    Rest2 = parse_equal_sign(Rest),
@@ -1045,7 +1143,7 @@ parse_hostport(Str) ->
 
 parse_port(Rest,Sport) ->
     case list_to_integer(Sport) of
-	Port when integer(Port) -> Port;
+	Port when is_integer(Port) -> Port;
 	_ -> error(parsing_port,Rest)
     end.
 
@@ -1077,6 +1175,6 @@ get_head(Str,Tail) ->
 get_head([H|Tail],Tail,Rhead) -> lists:reverse([H|Rhead]);
 get_head([H|Rest],Tail,Rhead) -> get_head(Rest,Tail,[H|Rhead]).
 
-b2l(B) when binary(B) -> B;
-b2l(L) when list(L)   -> list_to_binary(L).
+b2l(B) when is_binary(B) -> B;
+b2l(L) when is_list(L)   -> list_to_binary(L).
 
